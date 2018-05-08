@@ -2,13 +2,9 @@
  
 ## Assumptions
 We assume the following in this writeup:
- - you know what web-platform-tests is and you have a working checkout and can run tests
- - maybe some more about WebDriver
- - familiarity with javascript and python
- 
-## What problem are we trying to solve?
- 
-## What problem are we not trying to solve?
+ - You know what web-platform-tests is and you have a working checkout and can run tests
+ - You know what WebDriver or Selenium is
+ - Familiarity with javascript and python
  
 ## Code!
  
@@ -19,7 +15,7 @@ First, we need to think of what the API will look like a little. We will be usin
 The first part of this will be browser agnostic, but later we will need to implement a specific layer for each browser (here we will do Firefox and Chrome).
  
 ## Code!
- 
+
 ### ```resources/testdriver.js```
  
 This is the main entry point the tests get. Here we need to add a function to the test_driver object that will call the test_driver_internal object.
@@ -90,12 +86,13 @@ window.test_driver_internal.set_element_rect = function(x, y, width, height) {
     return pending_promise;
 };
 ```
-(pending promise??)
 The main thing here is the postMessage argument. The first argument is a json object with properties
  - ```type```: this always has to be the string ```"action"```
  - ```action```: the name of the testdriver command this defines (in this case, set_window_rect)
  - any other things you want to pass to the next point of execution (in this case, the x, y coordinates and the width and height)
- 
+
+ The pending promise needs to be there as it is resolved when the window recieves a completion message from the executor.
+
  Next, this is passed to the executor and protocol in wptrunner. Time to switch to python!
  
 ```tools/wptrunner/wptrunner/executors/protocol.py```
@@ -211,10 +208,83 @@ class SeleniumProtocol(Protocol):
  
 ### Firefox
 We use the [set window rect](http://marionette-client.readthedocs.io/en/master/reference.html#marionette_driver.marionette.Marionette.set_window_rect) marionette command.
+
+We will use executormarionette and use the Marionette python API.
+ 
+We have little actual work to do here! We just need to define a subclass of the protocol part we defined earlier.
+ 
+```python
+class MarionetteSetWindowRectProtocolPart(SetWindowRectProtocolPart):
+    def setup(self):
+        self.marionette = self.parent.marionette
+ 
+    def set_window_rect(self, x, y, width, height):
+        return self.marionette.set_window_rect(x, y, width, height)
+```
+ 
+Make sure to import the protocol part too!
+ 
+```python
+from .protocol import (BaseProtocolPart,
+                       TestharnessProtocolPart,
+                       Protocol,
+                       SelectorProtocolPart,
+                       ClickProtocolPart,
+                       SendKeysProtocolPart,
+                       {... other protocol parts}
+                       SetWindowRectProtocolPart, # add this!
+                       TestDriverProtocolPart)
+```
+ 
+Here we have the setup method which just redefines the webdriver object at this level. The important part is the set_window_rect function (and it's important it is named that since we called it that earlier). This will be call the Marionette API for [set window rect](http://marionette-client.readthedocs.io/en/master/reference.html#marionette_driver.marionette.Marionette.set_window_rect) (self.marionette is a marionette instance here).
+ 
+Finally, we just need to tell the SeleniumProtocol to implement this part.
+ 
+```python
+class MarionetteProtocol(Protocol):
+    implements = [MarionetteBaseProtocolPart,
+                  MarionetteTestharnessProtocolPart,
+                  MarionettePrefsProtocolPart,
+                  MarionetteStorageProtocolPart,
+                  MarionetteSelectorProtocolPart,
+                  MarionetteClickProtocolPart,
+                  MarionetteSendKeysProtocolPart,
+                  {... other protocol parts}
+                  MarionetteSetWindowRectProtocolPart # add this
+                  MarionetteTestDriverProtocolPart]
+```
  
  
  
 ### Other Browsers
- 
- 
+
+Other browsers may also use executorselenium (such as safari), or a completely new executor (such as servo). For these, you must change the executor in the same way as we did with chrome and firefox.
+  
 ### Write an infra test
+
+Make sure to add a test to `infrastructure/testdriver` :)
+
+Here is some template code!
+
+```html
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>TestDriver set window rect method</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+
+<script>
+async_test(t => {
+  test_driver
+    .set_window_rect(100, 100, 100, 100) // watch the window resize!
+    .then(() => {
+        // do something!
+        t.done());
+    }
+    .catch(t.unreached_func("set window rect failed"));
+});
+</script>
+```
+
